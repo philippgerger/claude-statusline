@@ -1,0 +1,4 @@
+# Runtime data — never commit real session names
+session-names.json
+settings.json.bak-*
+node_modules/
