@@ -11,6 +11,18 @@ The name is colored (stable hue per name) so you can tell your `bugs` terminal f
 terminal at a glance — even across `/clear`. Set it with `/rename <name>` or let Claude pick one with
 `/rename-suggest`.
 
+On a **narrow terminal** it automatically reflows to two rows instead of truncating — identity on top,
+the numbers that grow below:
+
+```
+🏷 deploy | 🤖 Opus 4.8
+🧠 445,274 (45%) | 💰 $1.23 session / $12.49 today
+```
+
+It wraps only when the one-line version wouldn't fit the terminal width (`COLUMNS`, exposed by Claude
+Code ≥ 2.1.153). Force it with the `CLAUDE_STATUSLINE_ROWS` env var: `auto` (default), `1` (always one
+row), or `2` (always two).
+
 ## How it works
 
 - **`statusline.js`** wraps [`ccusage statusline`](https://github.com/ryoppippi/ccusage), then reorders

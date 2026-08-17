@@ -112,5 +112,33 @@ if (line) {
 }
 
 // 🔥 burn-rate segment is intentionally omitted by not including it here.
-const ordered = [label, context, model, cost].filter(Boolean);
-process.stdout.write(ordered.join(' | '));
+// Layout: on a wide terminal everything fits on one row; when it wouldn't, we
+// wrap to two rows — identity (name · model) on top, the numbers that grow
+// (context · cost) below — so a narrow terminal reflows instead of ellipsing.
+// Toggle with CLAUDE_STATUSLINE_ROWS=auto|1|2 (default: auto).
+const SEP = ' | ';
+
+// Visible width, ignoring ANSI colour codes. We iterate by code point so an
+// emoji counts once, and add 1 per emoji since terminals render them ~2 cols
+// wide — a rough estimate is fine, we only need a wrap threshold.
+function width(str) {
+  const bare = str.replace(/\x1b\[[0-9;]*m/g, '');
+  let w = 0;
+  for (const ch of bare) w += ch.codePointAt(0) > 0x2000 ? 2 : 1;
+  return w;
+}
+
+const oneLine = [label, context, model, cost].filter(Boolean).join(SEP);
+const mode = process.env.CLAUDE_STATUSLINE_ROWS || 'auto';
+const cols = parseInt(process.env.COLUMNS || '0', 10);
+const tooWide = cols > 0 && width(oneLine) > cols - 1;
+
+let output;
+if (mode === '2' || (mode === 'auto' && tooWide)) {
+  const row1 = [label, model].filter(Boolean).join(SEP);
+  const row2 = [context, cost].filter(Boolean).join(SEP);
+  output = [row1, row2].filter(Boolean).join('\n');
+} else {
+  output = oneLine;
+}
+process.stdout.write(output);
