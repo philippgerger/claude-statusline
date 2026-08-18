@@ -13,5 +13,5 @@ node ~/.claude/session-name.js set $ARGUMENTS
 Notes:
 - The name is scoped to THIS terminal's session.
 - If `$ARGUMENTS` is empty the name is cleared.
-- The new name appears in the statusline (as `🏷 <name>`) on the next render.
+- The new name appears in the statusline (colored, at the start) on the next render.
 Do not do anything beyond running that one command.

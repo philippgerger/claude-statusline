@@ -6,10 +6,10 @@ limits, and the git branch — built entirely from the status JSON Claude Code p
 instantly with no external process or network call.
 
 ```
-🏷 deploy | 🤖 Opus 4.8 | 🌿 main | 🧠 75,635 (8%) | 💰 $2.50 session | ⏳ 14% 5h · 9% wk
+deploy | 🤖 Opus 4.8 | 🌿 main | 🧠 75,635 (8%) | 💰 $2.50 session | ⏳ 14% 5h · 9% wk
 ```
 
-- **🏷 name** — a per-terminal name you set with `/rename`, colored with a stable hue so you can tell
+- **name** — a per-terminal name you set with `/rename`, colored with a stable hue so you can tell
   your `bugs` terminal from your `deploy` terminal at a glance, even across `/clear`. Falls back to
   Claude Code's own session name.
 - **🧠 context** — tokens used and % of the context window, colored **green** under 70%, **yellow**
@@ -23,7 +23,7 @@ On a **narrow terminal** it reflows to two rows instead of ellipsing — identit
 grow below:
 
 ```
-🏷 deploy | 🤖 Opus 4.8 | 🌿 main
+deploy | 🤖 Opus 4.8 | 🌿 main
 🧠 75,635 (8%) | 💰 $2.50 session | ⏳ 14% 5h · 9% wk
 ```
 

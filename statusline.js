@@ -3,10 +3,10 @@
 // pipes in on stdin — no external process, no network, so it renders instantly.
 //
 // Layout (segments, in order):
-//   🏷 name · 🧠 context · 🤖 model · 💰 cost · ⏳ rate limits · 🌿 branch
+//   name · 🧠 context · 🤖 model · 💰 cost · ⏳ rate limits · 🌿 branch
 //
-//   🏷  per-terminal session name set via /rename (falls back to Claude Code's
-//       own session name); coloured with a stable per-name hue.
+//   name  per-terminal session name set via /rename (falls back to Claude Code's
+//         own session name); coloured with a stable per-name hue, no icon.
 //   🧠  context-window fill: tokens + %, green under 70%, yellow 70–90%, red 90%+.
 //   🤖  model display name.
 //   💰  this session's cost.
@@ -96,7 +96,7 @@ let rawName = customName();
 if (!rawName && data.session_name) {
   rawName = data.session_name.length > 24 ? data.session_name.slice(0, 23) + '…' : data.session_name;
 }
-const label = rawName ? paint(`1;${colourFor(rawName)}`, `🏷 ${rawName}`) : '';
+const label = rawName ? paint(`1;${colourFor(rawName)}`, rawName) : '';
 
 // ─── Context window ───────────────────────────────────────────────────────────
 let context = '';
