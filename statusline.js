@@ -111,13 +111,35 @@ function colourFor(str) {
   return PALETTE[h % PALETTE.length];
 }
 
+// An explicit per-terminal colour override, set via /color and stored in
+// session-colors.json (sister to session-names.json, same PID-based key). When
+// present it wins over the name-hash hue; otherwise we fall back to colourFor().
+const COLOR_CODES = {
+  red: 91, green: 92, yellow: 93, blue: 94, magenta: 95, cyan: 96,
+  gray: 90, white: 97,
+};
+function colourOverride() {
+  const keys = [];
+  const cpid = claudePid();
+  if (cpid) keys.push(`pid:${cpid}`);
+  const sid = process.env.CLAUDE_CODE_SESSION_ID || data.session_id || '';
+  if (sid) keys.push(sid);
+  if (!keys.length) return null;
+  try {
+    const db = JSON.parse(fs.readFileSync(path.join(__dirname, 'session-colors.json'), 'utf8'));
+    for (const k of keys) if (db[k] && db[k].color) return COLOR_CODES[db[k].color] || null;
+  } catch { /* no db */ }
+  return null;
+}
+
 // Prefer the user's /rename; otherwise fall back to Claude Code's own session
 // name (truncated — those can be a whole sentence).
 let rawName = customName();
 if (!rawName && data.session_name) {
   rawName = data.session_name.length > 24 ? data.session_name.slice(0, 23) + '…' : data.session_name;
 }
-const label = rawName ? paint(`1;${colourFor(rawName)}`, rawName) : '';
+const nameColour = colourOverride() || colourFor(rawName);
+const label = rawName ? paint(`1;${nameColour}`, rawName) : '';
 
 // ─── Context window ───────────────────────────────────────────────────────────
 let context = '';
@@ -136,7 +158,11 @@ let model = '';
 if (data.model && data.model.display_name) {
   // Trim trailing "(1M context)" and similar parentheticals for a compact label.
   const name = data.model.display_name.replace(/\s*\([^)]*\)\s*$/, '').trim();
-  model = `🤖 ${name}`;
+  // Append the reasoning-effort level (high/medium/low/…) so you can see at a
+  // glance how hard this session is thinking. Fast mode shows a ⚡ instead.
+  const effort = data.effort && data.effort.level ? String(data.effort.level) : '';
+  const tag = data.fast_mode ? '⚡ fast' : (effort ? `· ${effort}` : '');
+  model = `🤖 ${name}${tag ? ` ${tag}` : ''}`;
 }
 
 // ─── Cost (this session + today across all sessions) ──────────────────────────

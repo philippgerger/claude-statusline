@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs claude-statusline into ~/.claude:
-#   - copies statusline.js + session-name.js to ~/.claude/
-#   - copies the /rename + /rename-suggest slash commands to ~/.claude/commands/
+#   - copies statusline.js + session-name.js + session-color.js to ~/.claude/
+#   - copies the /rename + /rename-suggest + /color slash commands to ~/.claude/commands/
 #   - points settings.json -> statusLine at the statusline (backing it up first)
 #
 # Re-running is safe (idempotent). Requires node on PATH.
@@ -19,8 +19,10 @@ mkdir -p "$CLAUDE_DIR/commands"
 echo "Installing scripts to $CLAUDE_DIR ..."
 cp "$SRC/statusline.js"    "$CLAUDE_DIR/statusline.js"
 cp "$SRC/session-name.js"  "$CLAUDE_DIR/session-name.js"
+cp "$SRC/session-color.js" "$CLAUDE_DIR/session-color.js"
 cp "$SRC/commands/rename.md"         "$CLAUDE_DIR/commands/rename.md"
 cp "$SRC/commands/rename-suggest.md" "$CLAUDE_DIR/commands/rename-suggest.md"
+cp "$SRC/commands/color.md"          "$CLAUDE_DIR/commands/color.md"
 
 echo "Wiring statusLine into $SETTINGS ..."
 CLAUDE_DIR="$CLAUDE_DIR" SETTINGS="$SETTINGS" node - <<'NODE'
@@ -51,3 +53,4 @@ NODE
 echo
 echo "Done. Open a new Claude Code session (or run /statusline) to see it."
 echo "Name a session with:  /rename <name>   or   /rename-suggest"
+echo "Colour its name with: /color <red|green|yellow|blue|magenta|cyan|gray|white>"

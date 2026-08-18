@@ -7,16 +7,19 @@ figure — today's total cost — is fetched from [ccusage](https://github.com/r
 background and cached, so a render never blocks.
 
 ```
-deploy | 🤖 Opus 4.8 | 🌿 main | 🧠 75,635 (8%) | 💰 $2.50 session / $9.48 today | ⏳ 14% 5h · 9% wk
+deploy | 🤖 Opus 4.8 · high | 🌿 main | 🧠 75,635 (8%) | 💰 $2.50 session / $9.48 today | ⏳ 14% 5h · 9% wk
 ```
 
 - **name** — a per-terminal name you set with `/rename`, colored with a stable hue so you can tell
   your `bugs` terminal from your `deploy` terminal at a glance, even across `/clear`. Falls back to
-  Claude Code's own session name.
+  Claude Code's own session name. Pin a specific color with `/color <color>` when you'd rather choose
+  than take the auto hue.
 - **🧠 context** — tokens used and % of the context window, colored **green** under 70%, **yellow**
   70–90%, **red** past 90%, so you notice before you run low.
-- **🤖 model** · **💰 cost** — the active model, this session's cost, and today's total across all
-  sessions (the `today` figure needs `ccusage`, refreshed in the background; omitted if unavailable).
+- **🤖 model** · **💰 cost** — the active model with its **reasoning-effort** level appended
+  (`· high` / `· medium` / `· low`, or `⚡ fast` in fast mode), this session's cost, and today's total
+  across all sessions (the `today` figure needs `ccusage`, refreshed in the background; omitted if
+  unavailable).
 - **⏳ limits** — how much of your **5-hour** and **weekly** usage windows you've burned (same color
   thresholds). Nothing else surfaces this.
 - **🌿 branch** — the current git branch of the working directory.
@@ -43,7 +46,10 @@ row), or `2` (always two).
   the terminal's own `claude` process PID — the one handle that's both unique per terminal and stable
   across `/clear` (the session id is regenerated on `/clear`; the SSE port is shared across terminals in
   one window). The statusline and the writer run the identical PID walk, so both agree on the key.
-- **`/rename`** and **`/rename-suggest`** are the slash commands that write those names.
+- **`session-color.js`** stores per-terminal name colors in `~/.claude/session-colors.json`, keyed the
+  same PID way. When set, the color wins over the name-hash hue; the statusline falls back to the hash
+  when there's no override.
+- **`/rename`** / **`/rename-suggest`** write the names; **`/color`** writes the color override.
 
 ## Install
 
@@ -56,16 +62,16 @@ cd claude-statusline
 ./install.sh
 ```
 
-The installer copies `statusline.js` + `session-name.js` into `~/.claude/`, copies the two slash
-commands into `~/.claude/commands/`, and points `~/.claude/settings.json` → `statusLine` at the script
-(backing up your existing `settings.json` first). Open a new Claude Code session to see it.
+The installer copies `statusline.js` + `session-name.js` + `session-color.js` into `~/.claude/`, copies
+the slash commands into `~/.claude/commands/`, and points `~/.claude/settings.json` → `statusLine` at
+the script (backing up your existing `settings.json` first). Open a new Claude Code session to see it.
 
 > Custom Claude config dir? Run `CLAUDE_DIR=/path/to/.claude ./install.sh`.
 
 ### Manual install
 
-If you'd rather not run the script: copy `statusline.js` and `session-name.js` into `~/.claude/`, copy
-`commands/*.md` into `~/.claude/commands/`, and add this to `~/.claude/settings.json`:
+If you'd rather not run the script: copy `statusline.js`, `session-name.js`, and `session-color.js` into
+`~/.claude/`, copy `commands/*.md` into `~/.claude/commands/`, and add this to `~/.claude/settings.json`:
 
 ```json
 {
@@ -80,14 +86,16 @@ If you'd rather not run the script: copy `statusline.js` and `session-name.js` i
 
 - `/rename <name>` — name this terminal's session (empty clears it).
 - `/rename-suggest` — let Claude infer a short name from what you're working on.
+- `/color <color>` — pin the name's color (`red green yellow blue magenta cyan gray white`); empty
+  reverts to the auto hue.
 
-Names persist across `/clear` and show on the next statusline render.
+Names and colors persist across `/clear` and show on the next statusline render.
 
 ## Uninstall
 
-Remove `statusline.js`, `session-name.js`, `session-names.json`, and any `.statusline-today.json*` from
-`~/.claude/`; delete
-`commands/rename.md` + `commands/rename-suggest.md`; and remove the `statusLine` block from
+Remove `statusline.js`, `session-name.js`, `session-color.js`, `session-names.json`,
+`session-colors.json`, and any `.statusline-today.json*` from `~/.claude/`; delete `commands/rename.md`
++ `commands/rename-suggest.md` + `commands/color.md`; and remove the `statusLine` block from
 `settings.json` (or restore a `settings.json.bak-*` backup the installer made).
 
 ## License
