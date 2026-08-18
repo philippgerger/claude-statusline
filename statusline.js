@@ -1,13 +1,21 @@
 #!/usr/bin/env node
-// A Claude Code statusline: 🏷 session name · 🧠 context · 🤖 model · 💰 cost.
+// A Claude Code statusline, built entirely from the status JSON that Claude Code
+// pipes in on stdin — no external process, no network, so it renders instantly.
 //
-// It's a thin wrapper around `ccusage statusline` that reorders/trims its
-// segments to the layout above and prepends a per-terminal session name (set
-// via the /rename slash command). ccusage has no built-in way to reorder or
-// hide segments, so we run it, split its single output line on " | ", identify
-// each segment by its leading emoji, and reassemble in our preferred order.
-// The block-cost detail and the 🔥 burn-rate segment are dropped. Context math
-// comes straight from ccusage, unchanged.
+// Layout (segments, in order):
+//   🏷 name · 🧠 context · 🤖 model · 💰 cost · ⏳ rate limits · 🌿 branch
+//
+//   🏷  per-terminal session name set via /rename (falls back to Claude Code's
+//       own session name); coloured with a stable per-name hue.
+//   🧠  context-window fill: tokens + %, green under 70%, yellow 70–90%, red 90%+.
+//   🤖  model display name.
+//   💰  this session's cost.
+//   ⏳  how much of your 5-hour and weekly usage windows you've burned.
+//   🌿  current git branch of the working directory.
+//
+// On a narrow terminal it reflows to two rows — identity on top, the numbers
+// that grow below — instead of ellipsing. Toggle with
+// CLAUDE_STATUSLINE_ROWS=auto|1|2 (default: auto).
 //
 // Install: point settings.json → statusLine.command at this file (see README /
 // install.sh). This script and session-name.js must live in the same directory
@@ -17,10 +25,23 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-// Claude Code passes the status JSON on stdin — forward it to ccusage verbatim.
+// Claude Code passes the status JSON on stdin.
 let input = '';
 try { input = fs.readFileSync(0, 'utf8'); } catch { /* no stdin */ }
+let data = {};
+try { data = JSON.parse(input) || {}; } catch { /* not JSON */ }
 
+// ─── ANSI helpers ───────────────────────────────────────────────────────────
+const RESET = '\x1b[0m';
+const paint = (code, s) => `\x1b[${code}m${s}${RESET}`;
+// Colour a percentage: green ok, yellow warning, red danger.
+function pctColour(pct) {
+  if (pct >= 90) return 91; // red
+  if (pct >= 70) return 93; // yellow
+  return 92;                // green
+}
+
+// ─── Session name ─────────────────────────────────────────────────────────────
 // Resolve this terminal's custom name (set via /rename). We key by the terminal's
 // own `claude` process PID — the only handle that is both unique per terminal and
 // stable across /clear. (The session id is regenerated on /clear; the SSE port is
@@ -46,81 +67,93 @@ function claudePid() {
   return '';
 }
 
-function candidateKeys(jsonInput) {
+function customName() {
   const keys = [];
   const cpid = claudePid();
   if (cpid) keys.push(`pid:${cpid}`);
-  let sid = process.env.CLAUDE_CODE_SESSION_ID || '';
-  if (!sid) { try { sid = (JSON.parse(jsonInput) || {}).session_id || ''; } catch { /* not JSON */ } }
+  const sid = process.env.CLAUDE_CODE_SESSION_ID || data.session_id || '';
   if (sid) keys.push(sid);
-  return keys;
-}
-
-function sessionName(keys) {
   if (!keys.length) return '';
   try {
     const db = JSON.parse(fs.readFileSync(path.join(__dirname, 'session-names.json'), 'utf8'));
     for (const k of keys) if (db[k] && db[k].name) return db[k].name;
-    return '';
-  } catch { return ''; }
+  } catch { /* no db */ }
+  return '';
 }
 
-let out = '';
-try {
-  out = execFileSync('npx', ['-y', 'ccusage', 'statusline', ...process.argv.slice(2)], {
-    input,
-    encoding: 'utf8',
-    stdio: ['pipe', 'pipe', 'ignore'],
-  });
-} catch (e) {
-  // If ccusage errored, salvage whatever it managed to print.
-  out = (e && e.stdout ? e.stdout.toString() : '') || '';
-}
-
-// The name label renders even if ccusage produced nothing, so a rename still
-// shows when ccusage is slow/offline. Each name gets a stable colour derived
-// from its own text, so a given terminal keeps the same hue across renders and
-// different names stay visually distinct. Bright fg codes: red/green/yellow/
-// blue/magenta/cyan.
+// Each name gets a stable colour derived from its own text, so a given terminal
+// keeps the same hue across renders and different names stay visually distinct.
 const PALETTE = [91, 92, 93, 94, 95, 96];
 function colourFor(str) {
   let h = 0;
   for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
   return PALETTE[h % PALETTE.length];
 }
-const name = sessionName(candidateKeys(input));
-const label = name ? `\x1b[1;${colourFor(name)}m🏷 ${name}\x1b[0m` : '';
 
-// ccusage prints one status line; take the last non-empty line to be safe.
-const line = out.split('\n').map((s) => s.trim()).filter(Boolean).pop() || '';
+// Prefer the user's /rename; otherwise fall back to Claude Code's own session
+// name (truncated — those can be a whole sentence).
+let rawName = customName();
+if (!rawName && data.session_name) {
+  rawName = data.session_name.length > 24 ? data.session_name.slice(0, 23) + '…' : data.session_name;
+}
+const label = rawName ? paint(`1;${colourFor(rawName)}`, `🏷 ${rawName}`) : '';
 
-let context, model, cost;
-if (line) {
-  const segs = line.split(' | ');
-  const find = (emoji) => segs.find((s) => s.startsWith(emoji));
-
-  context = find('🧠'); // 445,274 (45%)
-  model = find('🤖');   // Opus 4.8
-  cost = find('💰');    // $1.23 session / $12.49 today / $12.49 block (…)
-
-  // Trim the cost segment to just the session + today figures.
-  if (cost) {
-    const parts = cost.split(' / ');
-    const kept = parts.filter((p) => /\bsession\b|\btoday\b/.test(p));
-    cost = (kept.length ? kept : [parts[0]]).join(' / ');
-  }
+// ─── Context window ───────────────────────────────────────────────────────────
+let context = '';
+const cw = data.context_window || {};
+if (typeof cw.used_percentage === 'number') {
+  const cu = cw.current_usage || {};
+  const tokens = (cu.input_tokens || 0) + (cu.output_tokens || 0) +
+    (cu.cache_creation_input_tokens || 0) + (cu.cache_read_input_tokens || 0);
+  const shown = tokens || cw.total_input_tokens || 0;
+  const pct = Math.round(cw.used_percentage);
+  context = paint(pctColour(pct), `🧠 ${shown.toLocaleString('en-US')} (${pct}%)`);
 }
 
-// 🔥 burn-rate segment is intentionally omitted by not including it here.
-// Layout: on a wide terminal everything fits on one row; when it wouldn't, we
-// wrap to two rows — identity (name · model) on top, the numbers that grow
-// (context · cost) below — so a narrow terminal reflows instead of ellipsing.
-// Toggle with CLAUDE_STATUSLINE_ROWS=auto|1|2 (default: auto).
+// ─── Model ────────────────────────────────────────────────────────────────────
+let model = '';
+if (data.model && data.model.display_name) {
+  // Trim trailing "(1M context)" and similar parentheticals for a compact label.
+  const name = data.model.display_name.replace(/\s*\([^)]*\)\s*$/, '').trim();
+  model = `🤖 ${name}`;
+}
+
+// ─── Cost (this session) ──────────────────────────────────────────────────────
+let cost = '';
+if (data.cost && typeof data.cost.total_cost_usd === 'number') {
+  cost = `💰 $${data.cost.total_cost_usd.toFixed(2)} session`;
+}
+
+// ─── Rate limits (usage windows) ──────────────────────────────────────────────
+let limits = '';
+const rl = data.rate_limits || {};
+const win = (w) => (w && typeof w.used_percentage === 'number') ? Math.round(w.used_percentage) : null;
+const h5 = win(rl.five_hour);
+const wk = win(rl.seven_day);
+if (h5 !== null || wk !== null) {
+  const parts = [];
+  if (h5 !== null) parts.push(paint(pctColour(h5), `${h5}% 5h`));
+  if (wk !== null) parts.push(paint(pctColour(wk), `${wk}% wk`));
+  limits = `⏳ ${parts.join(' · ')}`;
+}
+
+// ─── Git branch ───────────────────────────────────────────────────────────────
+let branch = '';
+const cwd = (data.workspace && data.workspace.current_dir) || data.cwd || process.cwd();
+try {
+  const b = execFileSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 500 }).trim();
+  if (b) branch = `🌿 ${b}`;
+} catch { /* not a git repo */ }
+
+// ─── Layout ───────────────────────────────────────────────────────────────────
+// Wide terminal: one row. When it wouldn't fit, wrap to two rows — identity
+// (name · model · branch) on top, the numbers (context · cost · limits) below.
 const SEP = ' | ';
 
-// Visible width, ignoring ANSI colour codes. We iterate by code point so an
-// emoji counts once, and add 1 per emoji since terminals render them ~2 cols
-// wide — a rough estimate is fine, we only need a wrap threshold.
+// Visible width, ignoring ANSI colour codes. We iterate by code point and count
+// each emoji as 2 columns (terminals render them double-width); the result is a
+// close estimate — enough for a wrap threshold.
 function width(str) {
   const bare = str.replace(/\x1b\[[0-9;]*m/g, '');
   let w = 0;
@@ -128,16 +161,19 @@ function width(str) {
   return w;
 }
 
-const oneLine = [label, context, model, cost].filter(Boolean).join(SEP);
+const identity = [label, model, branch].filter(Boolean);
+const numbers = [context, cost, limits].filter(Boolean);
+const oneLine = [...identity, ...numbers].join(SEP);
+
 const mode = process.env.CLAUDE_STATUSLINE_ROWS || 'auto';
 const cols = parseInt(process.env.COLUMNS || '0', 10);
-const tooWide = cols > 0 && width(oneLine) > cols - 1;
+// Wrap a couple of columns early: emoji width is approximate and Claude Code may
+// share the row with notifications, so leaning toward two rows avoids ellipsis.
+const tooWide = cols > 0 && width(oneLine) > cols - 3;
 
 let output;
 if (mode === '2' || (mode === 'auto' && tooWide)) {
-  const row1 = [label, model].filter(Boolean).join(SEP);
-  const row2 = [context, cost].filter(Boolean).join(SEP);
-  output = [row1, row2].filter(Boolean).join('\n');
+  output = [identity.join(SEP), numbers.join(SEP)].filter(Boolean).join('\n');
 } else {
   output = oneLine;
 }

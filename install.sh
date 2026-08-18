@@ -4,8 +4,8 @@
 #   - copies the /rename + /rename-suggest slash commands to ~/.claude/commands/
 #   - points settings.json -> statusLine at the statusline (backing it up first)
 #
-# Re-running is safe (idempotent). Requires node + npx on PATH (npx fetches
-# ccusage on first run). Override the target dir with CLAUDE_DIR=/path ./install.sh
+# Re-running is safe (idempotent). Requires node on PATH.
+# Override the target dir with CLAUDE_DIR=/path ./install.sh
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
