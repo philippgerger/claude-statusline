@@ -1,4 +1,6 @@
-# Runtime data — never commit real session names
+# Runtime data — never commit real session names or cached cost
 session-names.json
+.statusline-today.json
+.statusline-today.json.lock
 settings.json.bak-*
 node_modules/

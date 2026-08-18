@@ -1,12 +1,13 @@
 # claude-statusline
 
-A compact, zero-dependency [Claude Code](https://docs.anthropic.com/en/docs/claude-code) statusline. It
-shows a per-terminal **session name**, context-window fill, model, session cost, your usage-window
-limits, and the git branch — built entirely from the status JSON Claude Code pipes in, so it renders
-instantly with no external process or network call.
+A compact [Claude Code](https://docs.anthropic.com/en/docs/claude-code) statusline. It shows a
+per-terminal **session name**, context-window fill, model, cost, your usage-window limits, and the git
+branch. Everything renders instantly from the status JSON Claude Code pipes in; the one cross-session
+figure — today's total cost — is fetched from [ccusage](https://github.com/ryoppippi/ccusage) in the
+background and cached, so a render never blocks.
 
 ```
-deploy | 🤖 Opus 4.8 | 🌿 main | 🧠 75,635 (8%) | 💰 $2.50 session | ⏳ 14% 5h · 9% wk
+deploy | 🤖 Opus 4.8 | 🌿 main | 🧠 75,635 (8%) | 💰 $2.50 session / $9.48 today | ⏳ 14% 5h · 9% wk
 ```
 
 - **name** — a per-terminal name you set with `/rename`, colored with a stable hue so you can tell
@@ -14,7 +15,8 @@ deploy | 🤖 Opus 4.8 | 🌿 main | 🧠 75,635 (8%) | 💰 $2.50 session | ⏳
   Claude Code's own session name.
 - **🧠 context** — tokens used and % of the context window, colored **green** under 70%, **yellow**
   70–90%, **red** past 90%, so you notice before you run low.
-- **🤖 model** · **💰 cost** — the active model and this session's cost.
+- **🤖 model** · **💰 cost** — the active model, this session's cost, and today's total across all
+  sessions (the `today` figure needs `ccusage`, refreshed in the background; omitted if unavailable).
 - **⏳ limits** — how much of your **5-hour** and **weekly** usage windows you've burned (same color
   thresholds). Nothing else surfaces this.
 - **🌿 branch** — the current git branch of the working directory.
@@ -24,7 +26,7 @@ grow below:
 
 ```
 deploy | 🤖 Opus 4.8 | 🌿 main
-🧠 75,635 (8%) | 💰 $2.50 session | ⏳ 14% 5h · 9% wk
+🧠 75,635 (8%) | 💰 $2.50 session / $9.48 today | ⏳ 14% 5h · 9% wk
 ```
 
 It wraps only when the one-line version wouldn't fit the terminal width (`COLUMNS`, exposed by Claude
@@ -34,7 +36,9 @@ row), or `2` (always two).
 ## How it works
 
 - **`statusline.js`** reads the [status JSON](https://code.claude.com/docs/en/statusline) on stdin
-  (context window, cost, model, rate limits, workspace) and renders the segments above. No dependencies.
+  (context window, cost, model, rate limits, workspace) and renders the segments above. The only thing
+  it doesn't get from stdin — today's cross-session cost — is refreshed out of band by a detached
+  `node statusline.js --refresh-today` that caches `ccusage daily` output; renders just read the cache.
 - **`session-name.js`** stores per-terminal names in `~/.claude/session-names.json`. Names are keyed by
   the terminal's own `claude` process PID — the one handle that's both unique per terminal and stable
   across `/clear` (the session id is regenerated on `/clear`; the SSE port is shared across terminals in
@@ -43,7 +47,8 @@ row), or `2` (always two).
 
 ## Install
 
-Requires **Node.js** on your PATH.
+Requires **Node.js** on your PATH. The optional `today` cost figure also uses `npx`/`ccusage` (bundled
+with Node); everything else works without it.
 
 ```sh
 git clone https://github.com/philippgerger/claude-statusline.git
@@ -80,7 +85,8 @@ Names persist across `/clear` and show on the next statusline render.
 
 ## Uninstall
 
-Remove `statusline.js`, `session-name.js`, and `session-names.json` from `~/.claude/`; delete
+Remove `statusline.js`, `session-name.js`, `session-names.json`, and any `.statusline-today.json*` from
+`~/.claude/`; delete
 `commands/rename.md` + `commands/rename-suggest.md`; and remove the `statusLine` block from
 `settings.json` (or restore a `settings.json.bak-*` backup the installer made).
 

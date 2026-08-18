@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// A Claude Code statusline, built entirely from the status JSON that Claude Code
-// pipes in on stdin — no external process, no network, so it renders instantly.
+// A Claude Code statusline, built from the status JSON that Claude Code pipes in
+// on stdin, so it renders instantly. The one cross-session figure that isn't in
+// stdin — today's total cost — is fetched from ccusage in the background and
+// cached, so it never blocks a render.
 //
 // Layout (segments, in order):
 //   name · 🧠 context · 🤖 model · 💰 cost · ⏳ rate limits · 🌿 branch
@@ -9,7 +11,7 @@
 //         own session name); coloured with a stable per-name hue, no icon.
 //   🧠  context-window fill: tokens + %, green under 70%, yellow 70–90%, red 90%+.
 //   🤖  model display name.
-//   💰  this session's cost.
+//   💰  this session's cost + today's total across all sessions.
 //   ⏳  how much of your 5-hour and weekly usage windows you've burned.
 //   🌿  current git branch of the working directory.
 //
@@ -21,9 +23,28 @@
 // install.sh). This script and session-name.js must live in the same directory
 // so they share session-names.json — the default is ~/.claude/.
 
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+
+// ─── Background refresh mode ─────────────────────────────────────────────────
+// Invoked as `node statusline.js --refresh-today`: fetch today's cross-session
+// cost from ccusage (which reads the local Claude logs) and cache it. This runs
+// detached from the render path so it never blocks the status line.
+const TODAY_CACHE = path.join(__dirname, '.statusline-today.json');
+if (process.argv.includes('--refresh-today')) {
+  try {
+    const out = execFileSync('npx', ['-y', 'ccusage', 'daily', '--json'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30000 });
+    const days = (JSON.parse(out).daily) || [];
+    const last = days[days.length - 1];
+    if (last && typeof last.totalCost === 'number') {
+      fs.writeFileSync(TODAY_CACHE, JSON.stringify({ cost: last.totalCost, ts: Date.now() }));
+    }
+  } catch { /* ccusage unavailable — today cost just stays hidden */ }
+  try { fs.unlinkSync(TODAY_CACHE + '.lock'); } catch { /* ignore */ }
+  process.exit(0);
+}
 
 // Claude Code passes the status JSON on stdin.
 let input = '';
@@ -118,10 +139,34 @@ if (data.model && data.model.display_name) {
   model = `🤖 ${name}`;
 }
 
-// ─── Cost (this session) ──────────────────────────────────────────────────────
+// ─── Cost (this session + today across all sessions) ──────────────────────────
+// Session cost is in stdin; today's cross-session total comes from ccusage via a
+// cached background refresh, so a render never blocks on it.
+function todayCost() {
+  let cached = null;
+  try { cached = JSON.parse(fs.readFileSync(TODAY_CACHE, 'utf8')); } catch { /* none yet */ }
+  const fresh = cached && (Date.now() - (cached.ts || 0) < 60000);
+  if (!fresh) {
+    // Kick off a background refresh unless one is already in flight (lock < 20s old).
+    const lock = TODAY_CACHE + '.lock';
+    let inFlight = false;
+    try { inFlight = Date.now() - fs.statSync(lock).mtimeMs < 20000; } catch { /* no lock */ }
+    if (!inFlight) {
+      try {
+        fs.writeFileSync(lock, String(process.pid));
+        spawn(process.execPath, [__filename, '--refresh-today'], { detached: true, stdio: 'ignore' }).unref();
+      } catch { /* can't spawn — skip, session cost still shows */ }
+    }
+  }
+  return cached && typeof cached.cost === 'number' ? cached.cost : null;
+}
+
 let cost = '';
 if (data.cost && typeof data.cost.total_cost_usd === 'number') {
-  cost = `💰 $${data.cost.total_cost_usd.toFixed(2)} session`;
+  const parts = [`$${data.cost.total_cost_usd.toFixed(2)} session`];
+  const today = todayCost();
+  if (today !== null) parts.push(`$${today.toFixed(2)} today`);
+  cost = `💰 ${parts.join(' / ')}`;
 }
 
 // ─── Rate limits (usage windows) ──────────────────────────────────────────────
