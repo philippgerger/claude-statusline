@@ -9,11 +9,19 @@
 //
 //   name  per-terminal session name set via /rename (falls back to Claude Code's
 //         own session name); coloured with a stable per-name hue, no icon.
-//   🧠  context-window fill: tokens + %, green under 70%, yellow 70–90%, red 90%+.
+//   🧠  context-window fill: tokens + %, on the shared percentage ramp.
 //   🤖  model display name.
 //   💰  this session's cost + today's total across all sessions.
-//   ⏳  how much of your 5-hour and weekly usage windows you've burned.
+//   ⏳  time to the 5-hour reset + how much of it is spent, then the weekly
+//       figure; every percentage uses the shared green→dark-red ramp.
 //   🌿  current git branch of the working directory.
+//
+//   ⏳ also gives the time left in the current 5-hour window, from resets_at.
+//
+// A second block, 🧵, renders on its own row under the status line, and only
+// when work runs in the background: the count, then each running subagent
+// (cyan) or background command (plain) with the time since it started. It comes
+// from the session transcript, because stdin does not carry it.
 //
 // On a narrow terminal it reflows to two rows — identity on top, the numbers
 // that grow below — instead of ellipsing. Toggle with
@@ -55,11 +63,48 @@ try { data = JSON.parse(input) || {}; } catch { /* not JSON */ }
 // ─── ANSI helpers ───────────────────────────────────────────────────────────
 const RESET = '\x1b[0m';
 const paint = (code, s) => `\x1b[${code}m${s}${RESET}`;
-// Colour a percentage: green ok, yellow warning, red danger.
+// Colour a percentage on one shared ramp, so the same number always means the
+// same colour wherever it appears: bright green at 0, yellow through the 60s
+// and 70s, red at 80, dark red from 90 to 100. We interpolate between the stops
+// and quantise into the xterm-256 colour cube, because 256 colours render
+// everywhere while truecolor does not (Apple Terminal has none).
+const PCT_STOPS = [
+  [0, [0, 255, 0]],     // bright green
+  [50, [150, 255, 0]],  // yellow-green
+  [70, [255, 255, 0]],  // yellow
+  [75, [255, 140, 0]],  // orange
+  [80, [255, 0, 0]],    // red
+  [90, [150, 0, 0]],    // dark red
+  [100, [90, 0, 0]],    // deep dark red
+];
+const CUBE = [0, 95, 135, 175, 215, 255];
 function pctColour(pct) {
-  if (pct >= 90) return 91; // red
-  if (pct >= 70) return 93; // yellow
-  return 92;                // green
+  const p = Math.max(0, Math.min(100, pct));
+  let lo = PCT_STOPS[0];
+  let hi = PCT_STOPS[PCT_STOPS.length - 1];
+  for (let i = 0; i < PCT_STOPS.length - 1; i++) {
+    if (p >= PCT_STOPS[i][0] && p <= PCT_STOPS[i + 1][0]) {
+      lo = PCT_STOPS[i];
+      hi = PCT_STOPS[i + 1];
+      break;
+    }
+  }
+  const span = hi[0] - lo[0];
+  const t = span ? (p - lo[0]) / span : 0;
+  // Nearest cube level per channel, then the xterm index for that cell.
+  const level = (v) => {
+    let best = 0;
+    for (let i = 1; i < CUBE.length; i++) {
+      if (Math.abs(CUBE[i] - v) < Math.abs(CUBE[best] - v)) best = i;
+    }
+    return best;
+  };
+  const rgb = [0, 1, 2].map((i) => Math.round(lo[1][i] + (hi[1][i] - lo[1][i]) * t));
+  // Truecolor where the terminal claims it, because the 256-colour cube is too
+  // coarse at the dark end (90% and 95% would share one cell).
+  const ct = process.env.COLORTERM || '';
+  if (ct === 'truecolor' || ct === '24bit') return `38;2;${rgb[0]};${rgb[1]};${rgb[2]}`;
+  return `38;5;${16 + 36 * level(rgb[0]) + 6 * level(rgb[1]) + level(rgb[2])}`;
 }
 
 // ─── Session name ─────────────────────────────────────────────────────────────
@@ -201,9 +246,25 @@ const rl = data.rate_limits || {};
 const win = (w) => (w && typeof w.used_percentage === 'number') ? Math.round(w.used_percentage) : null;
 const h5 = win(rl.five_hour);
 const wk = win(rl.seven_day);
+// Time left in the current 5-hour usage window. resets_at is epoch seconds.
+function timeLeft(resetsAt) {
+  if (typeof resetsAt !== 'number') return '';
+  const mins = Math.ceil((resetsAt * 1000 - Date.now()) / 60000);
+  if (mins <= 0) return '';
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h ? `${h}h${String(m).padStart(2, '0')}m` : `${m}m`;
+}
 if (h5 !== null || wk !== null) {
+  // The 5-hour window reads as "2h53m 31%": time to its reset, then how much of
+  // it is spent. The weekly window keeps its own label, because two bare
+  // percentages side by side say nothing about which is which.
   const parts = [];
-  if (h5 !== null) parts.push(paint(pctColour(h5), `${h5}% 5h`));
+  const left = timeLeft(rl.five_hour && rl.five_hour.resets_at);
+  const window5 = [left, h5 !== null ? `${h5}%` : ''].filter(Boolean).join(' ');
+  // Time and percentage read as one figure, so they carry one colour: the ramp
+  // position of the window that is being spent.
+  if (window5) parts.push(h5 !== null ? paint(pctColour(h5), window5) : window5);
   if (wk !== null) parts.push(paint(pctColour(wk), `${wk}% wk`));
   limits = `⏳ ${parts.join(' · ')}`;
 }
@@ -216,6 +277,121 @@ try {
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 500 }).trim();
   if (b) branch = `🌿 ${b}`;
 } catch { /* not a git repo */ }
+
+// ─── Threads (running subagents and background commands) ─────────────────────
+// Claude Code does not pass these on stdin, so we read them out of the session
+// transcript that stdin points at. A thread starts at its `tool_use` record (an
+// Agent call, or a Bash call with run_in_background) and ends when a
+// <task-notification> for its id lands, or — for a synchronous Agent — when its
+// tool_result arrives. We remember the byte offset we already parsed and read
+// only the new tail on each render, so a large transcript stays cheap.
+const THREADS_CACHE = path.join(__dirname, '.statusline-threads.json');
+
+function scanTranscript(text, state) {
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    // A completion notification retires a thread, whoever launched it.
+    if (line.includes('task-notification')) {
+      for (const m of line.matchAll(/<task-id>([^<]+)<\/task-id>/g)) state.done[m[1]] = 1;
+    }
+    if (!line.includes('tool_use') && !line.includes('toolUseResult')) continue;
+    let rec;
+    try { rec = JSON.parse(line); } catch { continue; }
+
+    // Launch: an Agent call, or a Bash call sent to the background.
+    const content = rec.message && rec.message.content;
+    if (Array.isArray(content)) {
+      for (const b of content) {
+        if (!b || b.type !== 'tool_use') continue;
+        const input = b.input || {};
+        const isAgent = b.name === 'Agent';
+        const isBg = b.name === 'Bash' && input.run_in_background;
+        if (!isAgent && !isBg) continue;
+        state.open[b.id] = {
+          kind: isAgent ? 'agent' : 'cmd',
+          desc: String(input.description || (isAgent ? input.subagent_type : input.command) || '')
+            .replace(/\s+/g, ' ').trim(),
+          at: Date.parse(rec.timestamp) || Date.now(),
+          id: null,
+        };
+      }
+    }
+
+    // Result: an async launch hands us the task id to watch; a synchronous
+    // Agent result means that thread is already finished.
+    const res = rec.toolUseResult;
+    if (res && typeof res === 'object' && Array.isArray(content)) {
+      for (const b of content) {
+        if (!b || b.type !== 'tool_result') continue;
+        const open = state.open[b.tool_use_id];
+        if (!open) continue;
+        const taskId = res.agentId || res.backgroundTaskId;
+        if (taskId) open.id = taskId; else delete state.open[b.tool_use_id];
+      }
+    }
+  }
+  // Drop anything already retired, plus threads older than 6 hours (a session
+  // that was killed never sends their notification).
+  const cutoff = Date.now() - 6 * 3600 * 1000;
+  for (const [useId, t] of Object.entries(state.open)) {
+    if ((t.id && state.done[t.id]) || t.at < cutoff) delete state.open[useId];
+  }
+}
+
+function runningThreads() {
+  const file = data.transcript_path;
+  if (!file) return [];
+  let stat;
+  try { stat = fs.statSync(file); } catch { return []; }
+  let state = null;
+  try { state = JSON.parse(fs.readFileSync(THREADS_CACHE, 'utf8')); } catch { /* first run */ }
+  // Start over when the transcript changed or was rewritten shorter than we read.
+  if (!state || state.file !== file || state.offset > stat.size) {
+    state = { file, offset: 0, open: {}, done: {} };
+  }
+  if (stat.size > state.offset) {
+    let text = '';
+    try {
+      const fd = fs.openSync(file, 'r');
+      const buf = Buffer.allocUnsafe(stat.size - state.offset);
+      fs.readSync(fd, buf, 0, buf.length, state.offset);
+      fs.closeSync(fd);
+      text = buf.toString('utf8');
+    } catch { return []; }
+    // Only parse up to the last complete line; the rest is read again next time.
+    const cut = text.lastIndexOf('\n');
+    if (cut !== -1) {
+      state.offset += Buffer.byteLength(text.slice(0, cut + 1), 'utf8');
+      scanTranscript(text.slice(0, cut + 1), state);
+      try { fs.writeFileSync(THREADS_CACHE, JSON.stringify(state)); } catch { /* cache is optional */ }
+    }
+  }
+  return Object.values(state.open).sort((a, b) => a.at - b.at);
+}
+
+// One row per render, not one row per thread: the status line is a fixed budget.
+function threadsRow() {
+  let open = [];
+  try { open = runningThreads(); } catch { return ''; }
+  if (!open.length) return '';
+  // hh:mm:ss, so the number advances on every render instead of sitting on the
+  // same rounded minute for an hour.
+  const age = (at) => {
+    const total = Math.max(0, Math.floor((Date.now() - at) / 1000));
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(Math.floor(total / 3600))}:${pad(Math.floor(total / 60) % 60)}:${pad(total % 60)}`;
+  };
+  const SHOWN = 3;
+  const cells = open.slice(0, SHOWN).map((t) => {
+    const desc = t.desc.length > 26 ? t.desc.slice(0, 25) + '…' : t.desc;
+    // Cyan marks a subagent; a background command keeps the plain foreground.
+    const shown = t.kind === 'agent' ? paint(96, desc) : desc;
+    return `${shown} ${paint(90, age(t.at))}`;
+  });
+  const rest = open.length - cells.length;
+  if (rest > 0) cells.push(paint(90, `+${rest}`));
+  return `🧵 ${paint(1, String(open.length))} ${cells.join(paint(90, ' · '))}`;
+}
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 // Wide terminal: one row. When it wouldn't fit, wrap to two rows — identity
@@ -248,4 +424,10 @@ if (mode === '2' || (mode === 'auto' && tooWide)) {
 } else {
   output = oneLine;
 }
+
+// Running threads get their own row under the status line, and only when there
+// is something to show.
+const threads = threadsRow();
+if (threads) output = [output, threads].filter(Boolean).join('\n');
+
 process.stdout.write(output);
